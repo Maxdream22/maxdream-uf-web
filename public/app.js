@@ -1,7 +1,19 @@
 'use strict';
 const $=id=>document.getElementById(id),fmt=(v,n=2)=>typeof v==='number'&&Number.isFinite(v)?v.toFixed(n):'--';
 const labels={IDLE:'ĐANG LỌC / CHỜ LỆNH',REQUEST_SENT:'ĐÃ GỬI YÊU CẦU – CHỜ PLC',CLEANING:'ĐANG SỤC RỬA',UNCONFIRMED:'CHƯA XÁC NHẬN PLC ĐÃ CHẠY',COMPLETED:'ĐANG ĐO HIỆU QUẢ PHỤC HỒI',OVERTIME:'SỤC RỬA QUÁ THỜI GIAN'};
-let busy=false,notice='';
+let busy=false,notice='',admin=false,csrf=null,canClean=false;
+function setRole(){
+ $('role').textContent=admin?'CHẾ ĐỘ: QUẢN TRỊ':'CHẾ ĐỘ: CHỈ XEM';
+ $('login').hidden=admin;$('logout').hidden=!admin;
+ $('clean').disabled=busy||!admin||!canClean;
+ if(!admin)$('notice').textContent='Chế độ chỉ xem. Đăng nhập để sử dụng điều khiển.';
+}
+async function checkAuth(){try{const r=await fetch('/api/auth',{cache:'no-store'}),v=await r.json();admin=!!v.admin;csrf=v.csrf||null;}catch(_){admin=false;csrf=null;}setRole();}
+$('login').onclick=()=>{$('loginError').textContent='';$('password').value='';$('loginDialog').showModal();$('password').focus();};
+$('cancelLogin').onclick=()=>$('loginDialog').close();
+$('loginForm').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('password').value})}),v=await r.json();if(!r.ok)throw Error(v.error||'LOGIN_FAILED');admin=true;csrf=v.csrf;$('password').value='';$('loginDialog').close();notice='';setRole();await refresh();}catch(e){$('loginError').textContent='Không đăng nhập được: '+e.message;}};
+$('logout').onclick=async()=>{try{await fetch('/api/logout',{method:'POST',headers:{'X-CSRF-Token':csrf}});}finally{admin=false;csrf=null;notice='';setRole();}};
+
 async function refresh(){
  try{
   const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);
@@ -22,18 +34,18 @@ async function refresh(){
   $('auto').textContent=s.auto_locked_by_hour?'AUTO TẠM KHÓA: giờ nước máy yếu':
    !s.clock_valid?'AUTO TẠM KHÓA: chưa đồng bộ giờ':
    !s.auto_armed?'AUTO CHƯA REARM (cần Q_FILT >1,45 trong 5 phút)':'AUTO SẴN SÀNG';
-  $('clean').disabled=busy||!fresh||s.state!=='IDLE'||s.output_enabled!==true;
-  if(!busy&&!notice&&s.output_enabled!==true)$('notice').textContent='Relay đang khóa trong firmware (chế độ an toàn).';
-  else if(notice)$('notice').textContent=notice;
+  canClean=fresh&&s.state==='IDLE'&&s.output_enabled===true;setRole();
+  if(admin&&!busy&&!notice&&s.output_enabled!==true)$('notice').textContent='Relay đang khóa trong firmware (chế độ an toàn).';
+  else if(admin&&notice)$('notice').textContent=notice;
  }catch(_){$('online').textContent='KHÔNG KẾT NỐI';$('state').textContent='KHÔNG XÁC ĐỊNH';$('clean').disabled=true;$('notice').textContent='Không xác minh được trạng thái hệ thống.';}
 }
 $('clean').addEventListener('click',async()=>{
- if(busy||$('clean').disabled)return;
+ if(!admin){$('login').click();return;}if(busy||$('clean').disabled)return;
  if(!confirm('Xác nhận gửi yêu cầu sục rửa đến PLC X1? Chu trình PLC dự kiến 3 phút.'))return;
  busy=true;$('clean').disabled=true;notice='Đang gửi đến MQTT...';$('notice').textContent=notice;
  try{
-  const r=await fetch('/api/clean',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}),x=await r.json();
+  const r=await fetch('/api/clean',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:'{}'}),x=await r.json();
   notice=r.ok?`Đã gửi broker; chờ ESP32 xác nhận. ID: ${x.request_id}`:`Không gửi: ${x.error||r.status}`;
  }catch(_){notice='Lỗi mạng: không tự gửi lại; kiểm tra trạng thái trước.';}
- finally{busy=false;await refresh();}
-});refresh();setInterval(refresh,3000);
+ finally{busy=false;await checkAuth();await refresh();}
+});checkAuth().then(refresh);setInterval(refresh,3000);setInterval(checkAuth,60000);
