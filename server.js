@@ -40,6 +40,19 @@ http.createServer((req,res)=>{
   });
  }
  if(req.method==='POST'&&u==='/api/logout'){const s=session(req);if(!csrfOK(req,s))return json(res,403,{error:'AUTH_REQUIRED'});sessions.delete(cookie(req));return json(res,200,{admin:false},{'Set-Cookie':'md_session=; Max-Age=0; '+cookieOpts});}
+ if(req.method==='POST'&&u==='/api/relay-mode'){
+  const sess=session(req);if(!sess)return json(res,401,{error:'ADMIN_REQUIRED'});
+  if(!csrfOK(req,sess))return json(res,403,{error:'CSRF_OR_ORIGIN_MISMATCH'});
+  if(!(req.headers['content-type']||'').startsWith('application/json'))return json(res,415,{error:'JSON_REQUIRED'});
+  if(!connected||!status||Date.now()-statusAt>12000)return json(res,503,{error:'ESP32_OFFLINE_OR_STALE'});
+  return readJSON(req,(err,body)=>{
+   if(err||typeof body.enabled!=='boolean')return json(res,400,{error:'BAD_REQUEST'});
+   if(body.enabled===true&&status.state!=='IDLE')return json(res,409,{error:'SYSTEM_BUSY'});
+   sess.last=Date.now();
+   const msg={command:'RELAY_MODE',enabled:body.enabled,source:'WEB',issued_at:Math.floor(Date.now()/1000)};
+   mc.publish(TOP+'control',JSON.stringify(msg),{qos:1,retain:false},e=>e?json(res,502,{error:'MQTT_FAILED'}):json(res,202,{queued_to_broker:true,enabled:body.enabled}));
+  });return;
+ }
  if(req.method==='POST'&&u==='/api/clean'){
   const s=session(req);if(!s)return json(res,401,{error:'ADMIN_REQUIRED'});
   if(!csrfOK(req,s))return json(res,403,{error:'CSRF_OR_ORIGIN_MISMATCH'});
@@ -53,4 +66,4 @@ http.createServer((req,res)=>{
  }
  if(req.method==='GET'&&assets[u]){const [name,type]=assets[u];res.writeHead(200,{...baseHeaders,'Content-Type':type});return fs.createReadStream(path.join(__dirname,'public',name)).pipe(res);}
  return json(res,404,{error:'NOT_FOUND'});
-}).listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('MAXDREAM UF V2.2 web started'));
+}).listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('MAXDREAM UF V2.8 web started'));
